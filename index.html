@@ -1546,6 +1546,33 @@ window.__APPSRC = "J3VzZSBzdHJpY3QnOwoKY29uc3QgeyBFbmdpbmUgfSA9IHJlcXVpcmUoJy4uL
       var n = GIF.frames.length; GIF = null; return { path: name, frames: n, bytes: bytes.length };
     } catch (e) { GIF = null; console.error(e); throw e; }
   }
+  /* ---- 구간별(행동조별) 분할 GIF: 여러 구간을 zip 하나로 모아서 내려받는다 ----
+     브라우저는 폴더에 조용히 여러 파일을 못 쓰므로, 한 턴의 구간 GIF들을 누적했다가
+     저장이 잠시 멈추면(=그 턴 종료) zip 하나로 다운로드한다. */
+  var GIFZIP = null, GIFZIP_T = null, GIFZIP_N = 0;
+  function zipFlush() {
+    if (!GIFZIP || !GIFZIP_N) { GIFZIP = null; GIFZIP_N = 0; return; }
+    var z = GIFZIP, n = GIFZIP_N; GIFZIP = null; GIFZIP_N = 0;
+    z.generateAsync({ type: 'blob' }).then(function (blob) {
+      download('행동조GIF_' + Date.now() + '.zip', blob);
+      toast(n + '개 구간(행동조) GIF를 zip으로 저장했어');
+    });
+  }
+  function gifSaveSplit(label) {
+    if (!GIF || !GIF.frames.length) { GIF = null; return null; }
+    var encodeGif = REQUIRE('gif').encodeGif;
+    var buf = encodeGif(GIF.frames, GIF.w, GIF.h, { loop: 0 });
+    var bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    var n = GIF.frames.length; GIF = null;
+    var fname = ((label != null && String(label) !== '') ? String(label) : 'seg_' + Date.now()) + '.gif';
+    if (typeof JSZip === 'undefined') {   // 폴백: 개별 다운로드
+      download('턴_' + fname, new Blob([bytes], { type: 'image/gif' })); return { path: fname, frames: n };
+    }
+    if (!GIFZIP) GIFZIP = new JSZip();
+    GIFZIP.file(fname, bytes); GIFZIP_N++;
+    clearTimeout(GIFZIP_T); GIFZIP_T = setTimeout(zipFlush, 900);   // 턴이 끝나면 자동 저장
+    return { path: fname, frames: n };
+  }
 
   /* ---------- Electron ipcRenderer 대체 ---------- */
   var PENDING = null;           // 드롭/버튼이 미리 넣어둔 xlsx 경로
@@ -1569,10 +1596,10 @@ window.__APPSRC = "J3VzZSBzdHJpY3QnOwoKY29uc3QgeyBFbmdpbmUgfSA9IHJlcXVpcmUoJy4uL
         case 'save-state': { download('마스레이드_전투_' + Date.now() + '.json', new Blob([JSON.stringify(args[0], null, 2)], { type: 'application/json' })); return true; }
         case 'load-state': { var jf = await pickFile('.json,application/json'); if (!jf) return null; try { return JSON.parse(await jf.text()); } catch (e) { return null; } }
         case 'copy-board': return await copyBoard();
-        case 'gif-choose-dir': return null;                 // 분할 저장 폴더 없음 → 파일별 저장
+        case 'gif-choose-dir': return 'zip';                // 분할 구간들을 zip 하나로 모아 저장
         case 'gif-start': GIF = { frames: [], w: 0, h: 0 }; return true;
         case 'gif-frame': return await gifFrame(args[1]);
-        case 'gif-save': return gifSave(args[0]);
+        case 'gif-save': return args[1] ? gifSaveSplit(args[0]) : gifSave(args[0]);
         default: return null;
       }
     },
